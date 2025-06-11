@@ -1,0 +1,69 @@
+def chm_preprocessing(chm_path: str) -> tuple:
+    """Read CHM imagery and extract georeferencing information"""
+    raster = gdal.Open(chm_path)
+    chm_data = raster.GetRasterBand(1).ReadAsArray()
+    geo_transform = raster.GetGeoTransform()
+    projection = raster.GetProjection()
+    raster_size = (raster.RasterXSize, raster.RasterYSize)
+    return chm_data, geo_transform, projection, raster_size
+
+def chm_downsampling(chm_data: np.ndarray, scale_factor: int = 1) -> np.ndarray:
+    """Downsample"""
+    return chm_data[::scale_factor, ::scale_factor]
+
+def chm_smoothing(chm_data: np.ndarray, sigma: float = 1.0) -> np.ndarray:
+    """Apply Gaussian filtering for smoothing"""
+    return gaussian_filter(chm_data, sigma=sigma)
+
+def foreground_mask_creation(chm_data: np.ndarray, height_threshold: float = 5.0) -> np.ndarray:
+
+    return chm_data > height_threshold
+
+def local_maxima_detection(chm_data: np.ndarray, min_distance: int = 5) -> np.ndarray:
+
+    return peak_local_max(chm_data, min_distance=min_distance, indices=False)
+
+def advanced_watershed_segmentation(...):
+
+    grad_x, grad_y = ndi.sobel(chm_data, axis=0), ndi.sobel(chm_data, axis=1)
+    gradient = np.sqrt(grad_x**2 + grad_y**2)
+    distance = ndi.distance_transform_edt(foreground_mask)
+
+    enhanced_gradient = 0.5 * gradient / np.max(gradient) + 0.5 * (1 - distance / np.max(distance))
+    
+    labels = watershed(enhanced_gradient, markers=markers, mask=foreground_mask, ...)
+    
+    region_areas = np.bincount(labels.flatten())
+    min_area_threshold = 10
+    labels = remove_small_regions(labels, region_areas, min_area_threshold)
+    
+    visualize_intermediate_results(...)
+    return labels
+
+def optimize_watershed_parameters(...):
+    """Grid search for optimizing parameters of the watershed algorithm"""
+    param_combinations = product(*param_grid.values())
+    for params in param_combinations:
+        labels = watershed(...)
+        score = calculate_metric(labels, eval_metric)
+    return best_params
+
+def calculate_compactness(labels: np.ndarray) -> float:
+    from skimage import measure
+    compactness_values = []
+    for label in np.unique(labels)[1:]:
+        mask = labels == label
+        contours = measure.find_contours(mask, 0.5)
+        perimeter = measure.perimeter(max(contours, key=len))
+        area = np.sum(mask)
+        compactness = (4 * np.pi * area) / (perimeter ** 2)
+        compactness_values.append(compactness)
+    return np.mean(compactness_values)
+
+def visualize_watershed_stages(...):
+    plt.figure(figsize=(20, 15))
+    plt.savefig(save_path, dpi=DPI)
+
+def save_segmentation_visualization(...):
+    plt.figure(figsize=(20, 15))
+    plt.savefig(save_path, dpi=DPI)
