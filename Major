@@ -1,0 +1,86 @@
+import os  
+import numpy as np 
+import geopandas as gpd  
+from scipy import ndimage as ndi  
+
+def main_workflow():
+
+    # ====================== Input parameter configuration ======================
+    chm_file = "The path of your file"
+    las_file = "The path of your file"
+    manual_annotation = "The path of your file"
+    output_directory = "The path of your file"
+    canopy_cover_output = "The path of your file"
+    os.makedirs(output_directory, exist_ok=True)
+
+    # ======================  CHM Segmentation Workflow ======================
+    print("\n==================== CHM segmentation starts ====================")
+    chm_data, geo_transform, projection, raster_size = chm_preprocessing(chm_file)
+    downsampled_chm = chm_downsampling(chm_data, scale_factor=1)
+    smoothed_chm = chm_smoothing(downsampled_chm, sigma=1)
+    foreground_mask = foreground_mask_creation(smoothed_chm, height_threshold=5)
+    local_maxima = local_maxima_detection(smoothed_chm, min_distance=15)
+    markers = ndi.label(local_maxima)[0]
+    watershed_dir = os.path.join(output_directory, 'watershed_intermediate')
+    segmentation_labels = advanced_watershed_segmentation(
+        smoothed_chm,
+        markers,
+        foreground_mask,
+        compactness=0.01,
+        connectivity=2,
+        visualize_intermediate=True,
+        save_dir=watershed_dir
+    )
+    vis_path = os.path.join(output_directory, 'chm_segmentation_vis.png')
+    save_segmentation_visualization(chm_data, smoothed_chm, foreground_mask, segmentation_labels, vis_path)
+
+    seg_shp_path = os.path.join(output_directory, 'initial_segmentation.shp')
+    spatial_ref = osr.SpatialReference()
+    spatial_ref.ImportFromEPSG(EPSG_CODE)
+    labels_to_shapefile(segmentation_labels, geo_transform, 1, seg_shp_path, spatial_ref)
+
+    print("\n==================== Comparison analysis begins ====================")
+    manual_gdf = load_manual_annotation(manual_annotation)
+    auto_gdf = gpd.read_file(seg_shp_path)
+    comparison_df = calculate_iou(auto_gdf, manual_gdf)
+    mismatch_regions = identify_mismatch_regions(comparison_df, threshold=0.5)
+
+    print("\n==================== canopy cover calculation starts ====================")
+    canopy_cover, cc_geo = las_to_canopy_cover(las_file, pixel_size=0.1)
+    save_canopy_cover_tif(canopy_cover, cc_geo, canopy_cover_output)
+    mean_cc = np.mean(canopy_cover)
+    print(f"canopy cover: {mean_cc * 100:.2f}%")
+
+    print("\n==================== Segmentation Optimization starts ====================")
+    corrected_gdfs = []
+
+    for region in tqdm(mismatch_regions, desc="Process differential regions"):
+        bbox = region['geometry'].bounds
+        if mean_cc >= 0.3:
+            # over
+            try:
+                labels, region_las = kmeans_over_correction(las_file, bbox, n_clusters=2)
+                corrected_shp = os.path.join(output_directory, f'over_correction_{region["auto_id"]}.shp')
+                gdf = GeoDataFrame(geometry=[shape(region['geometry'])], crs=EPSG_CODE)
+                corrected_gdfs.append(gdf)
+            except Exception as e:
+                print(f"over failed: {e}")
+        else:
+            # under
+            try:
+                labels, region_las = dbscan_under_correction(las_file, bbox, eps=1.5)
+                corrected_shp = os.path.join(output_directory, f'under_correction_{region["auto_id"]}.shp')
+                gdf = GeoDataFrame(geometry=[shape(region['geometry'])], crs=EPSG_CODE)
+                corrected_gdfs.append(gdf)
+            except Exception as e:
+                print(f"under failed: {e}")
+
+    print("\n==================== Visualization of results ====================")
+    correction_vis_path = os.path.join(output_directory, 'correction_overlay.png')
+    plot_correction_result(canopy_cover, cc_geo, auto_gdf, corrected_gdfs, correction_vis_path)
+
+    print("\n==================== Processing done ====================")
+
+
+if __name__ == '__main__':
+    main_workflow()
