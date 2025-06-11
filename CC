@@ -1,0 +1,185 @@
+import os
+import numpy as np
+import geopandas as gpd
+import matplotlib.pyplot as plt
+from osgeo import ogr, osr
+from shapely.geometry import Polygon
+import cv2  # For efficient contour extraction
+
+def labels_to_shapefile(labels: np.ndarray, 
+                       geo_transform: tuple, 
+                       pixel_size: float, 
+                       save_path: str, 
+                       spatial_ref: osr.SpatialReference) -> None:
+    """
+    Convert Segmentation Labels to Georeferenced Shapefile Polygons
+    
+    Args:
+        labels
+        geo_transform
+        pixel_size
+        save_path
+        spatial_ref
+        
+    Raises:
+        RuntimeError
+        ValueError
+    """
+    if len(labels.shape) != 2:
+        raise ValueError("2D")
+    if len(geo_transform) != 6:
+        raise ValueError("6Vs")
+    if pixel_size <= 0:
+        raise ValueError("Resolution must be a positive number")
+    
+    os.makedirs(os.path.dirname(save_path) or '.', exist_ok=True)
+    driver = ogr.GetDriverByName('ESRI Shapefile')
+    if driver is None:
+        raise RuntimeError("Failed to acquire Shapefile driver")
+    
+    if os.path.exists(save_path):
+        driver.DeleteDataSource(save_path)
+    
+    data_source = driver.CreateDataSource(save_path)
+    if data_source is None:
+        raise RuntimeError(f"Failed to create Shapefile: {save_path}")
+    
+    layer = data_source.CreateLayer(
+        'tree_crowns',
+        srs=spatial_ref,
+        geom_type=ogr.wkbPolygon
+    )
+    
+    layer.CreateField(ogr.FieldDefn('TreeID', ogr.OFTInteger))
+    layer.CreateField(ogr.FieldDefn('Area_m2', ogr.OFTReal))
+    layer.CreateField(ogr.FieldDefn('Height_m', ogr.OFTReal))
+    
+    for tree_id in np.unique(labels):
+        if tree_id == 0:  
+            continue
+        mask = (labels == tree_id).astype(np.uint8)
+        
+        contours, _ = cv2.findContours(
+            mask,
+            cv2.RETR_EXTERNAL,
+            cv2.CHAIN_APPROX_SIMPLE
+        )
+        
+        for contour in contours:
+            if len(contour) < 3: 
+                continue
+                
+            coords = contour.squeeze()
+            xs = geo_transform[0] + (coords[:, 0] * geo_transform[1])
+            ys = geo_transform[3] + (coords[:, 1] * geo_transform[5])
+            
+            poly = Polygon(zip(xs, ys))
+            
+            if not poly.is_valid:
+                poly = poly.buffer(0)
+            
+            feature = ogr.Feature(layer.GetLayerDefn())
+            feature.SetField('TreeID', int(tree_id))
+            feature.SetField('Area_m2', float(poly.area))
+            feature.SetField('Height_m', float(tree_id * 0.5))  # 示例高度值
+            feature.SetGeometry(ogr.CreateGeometryFromWkt(poly.wkt))
+            layer.CreateFeature(feature)
+            feature = None
+    data_source = None
+
+def plot_correction_result(canopy_cover: np.ndarray,
+                          cc_geo_transform: tuple,
+                          auto_gdf: gpd.GeoDataFrame,
+                          corrected_gdfs: list,
+                          save_path: str,
+                          dpi: int = 300,
+                          cmap: str = 'viridis') -> None:
+    """
+    Generate High-Quality Correction Result Visualizations
+    
+    Args:
+        canopy_cover
+        cc_geo_transform
+        auto_gdf
+        corrected_gdfs
+        save_path
+        dpi
+        cmap
+    """
+    fig, ax = plt.subplots(figsize=(12, 9))
+    fig.patch.set_alpha(0)
+    
+    xmin = cc_geo_transform[0]
+    xmax = xmin + canopy_cover.shape[1] * abs(cc_geo_transform[1])
+    ymax = cc_geo_transform[3]
+    ymin = ymax + canopy_cover.shape[0] * cc_geo_transform[5]
+    
+    im = ax.imshow(
+        canopy_cover,
+        cmap=cmap,
+        vmin=0,
+        vmax=1,
+        extent=[xmin, xmax, ymin, ymax],
+        origin='upper',
+        alpha=0.7
+    )
+    cbar = plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+    cbar.set_label('Canopy Cover Fraction', fontsize=12)
+    
+    auto_gdf.plot(
+        ax=ax,
+        edgecolor='red',
+        facecolor='none',
+        linewidth=1.5,
+        linestyle='--',
+        label=f'Initial Segments ({len(auto_gdf)} trees)'
+    )
+    
+    colors = plt.cm.tab10(np.linspace(0, 1, len(corrected_gdfs)))
+    legend_handles = []
+    
+    for i, gdf in enumerate(corrected_gdfs):
+        label = f'Corrected Set {i+1} ({len(gdf)} trees)'
+        gdf.plot(
+            ax=ax,
+            edgecolor=colors[i],
+            facecolor='none',
+            linewidth=2,
+            label=label
+        )
+        legend_handles.append(plt.Line2D([0], [0], color=colors[i], lw=2))
+    
+    scale_length = int((xmax - xmin) * 0.15)  
+    ax.plot(
+        [xmin + 50, xmin + 50 + scale_length],
+        [ymin + 50, ymin + 50],
+        color='black',
+        linewidth=3
+    )
+    ax.text(
+        xmin + 50 + scale_length/2,
+        ymin + 70,
+        f'{scale_length} m',
+        ha='center',
+        fontsize=10,
+        bbox=dict(facecolor='white', alpha=0.7, edgecolor='none')
+    )
+    
+    ax.legend(loc='upper right', framealpha=0.8)
+    
+    ax.set_title(
+        'Canopy Cover with Segmentation Comparison\n',
+        fontsize=14,
+        fontweight='bold'
+    )
+    ax.set_xlabel('Easting (m)', fontsize=10)
+    ax.set_ylabel('Northing (m)', fontsize=10)
+    ax.grid(True, linestyle='--', alpha=0.3)
+    
+    plt.savefig(
+        save_path,
+        dpi=dpi,
+        bbox_inches='tight',
+        facecolor='white'
+    )
+    plt.close(fig)
