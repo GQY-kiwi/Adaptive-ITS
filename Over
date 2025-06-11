@@ -1,0 +1,105 @@
+import numpy as np
+import laspy
+from sklearn.cluster import KMeans
+import os
+
+def calculate_hegyi_competition_index(target_points, all_points, search_radius=5.0):
+    """
+    Calculate the Hegyi competition index
+    
+    Args:
+        target_points
+        all_points
+        search_radius
+    
+    Returns:
+        np.ndarray
+    """
+    hegyi_indices = np.zeros(len(target_points))
+    
+    for i, target in enumerate(target_points):
+        h_i = target.z
+        
+        distances = np.sqrt((all_points.x - target.x)​**2 + (all_points.y - target.y)​**2)
+        
+        neighbor_mask = (distances <= search_radius) & (distances > 0)
+        neighbors = all_points[neighbor_mask]
+        
+        if len(neighbors) > 0:
+            height_ratios = neighbors.z / h_i
+            
+            inv_distances = 1.0 / distances[neighbor_mask]
+            
+            hegyi_index = np.sum(height_ratios * inv_distances)
+            hegyi_indices[i] = hegyi_index
+    
+    return hegyi_indices
+
+def weighted_kmeans_clustering(points, weights, n_clusters=2, max_iters=100, tol=1e-4):
+    """
+    Implementing Weighted K-means Clustering Algorithm
+    
+    Args:
+        points
+        weights
+        n_clusters
+        max_iters
+        tol
+    
+    Returns:
+        np.ndarray
+        np.ndarray
+    """
+    n_points = points.shape[0]
+    indices = np.random.choice(n_points, n_clusters, replace=False)
+    centers = points[indices].copy()
+    
+    for iter_num in range(max_iters):
+        distances = np.sqrt(((points[:, np.newaxis] - centers)​**2).sum(axis=2))  # n_points x n_clusters
+        weighted_distances = distances * weights[:, np.newaxis]
+        
+        labels = np.argmin(weighted_distances, axis=1)
+        
+        new_centers = np.zeros_like(centers)
+        for k in range(n_clusters):
+            mask = (labels == k)
+            if np.any(mask):
+                cluster_weights = weights[mask]
+                cluster_points = points[mask]
+                weighted_sum = np.sum(cluster_weights[:, np.newaxis] * cluster_points, axis=0)
+                weight_sum = np.sum(cluster_weights)
+                
+                if weight_sum > 0:
+                    new_centers[k] = weighted_sum / weight_sum
+                else:
+                    new_centers[k] = np.mean(cluster_points, axis=0)
+        
+        center_shift = np.sqrt(((new_centers - centers)​**2).sum(axis=1)).max()
+        if center_shift < tol:
+            break
+        
+        centers = new_centers.copy()
+    
+    return labels, centers
+
+def kmeans_over_correction(las_path: str, bbox: tuple, n_clusters: int = 2) -> tuple:
+
+    las = laspy.read(las_path)
+    min_x, min_y, max_x, max_y = bbox
+    mask = (las.x >= min_x) & (las.x <= max_x) & (las.y >= min_y) & (las.y <= max_y)
+    region_las = las[mask]
+    total_height = np.sum(region_las.z)
+    
+    weights = region_las.z / total_height
+    
+    features = np.column_stack((region_las.x, region_las.y))
+    
+    hegyi_indices = calculate_hegyi_competition_index(region_las, region_las, search_radius=5.0)
+    
+    labels, centers = weighted_kmeans_clustering(
+        features, 
+        weights * hegyi_indices, 
+        n_clusters=n_clusters
+    )
+    
+    return labels, region_las
