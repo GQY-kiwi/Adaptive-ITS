@@ -1,0 +1,23 @@
+# Adaptive-ITS
+import numpy as np  
+from osgeo import gdal, ogr, osr  
+import matplotlib.pyplot as plt  
+from scipy import ndimage as ndi 
+from skimage.segmentation import watershed  
+from skimage.feature import peak_local_max 
+from scipy.ndimage import gaussian_filter  
+import os  
+from shapely.geometry import Polygon, shape  
+import geopandas as gpd  
+from geopandas import GeoDataFrame 
+import laspy  
+from sklearn.cluster import KMeans, DBSCAN  
+from sklearn.metrics import pairwise_iou 
+import math  
+from tqdm import tqdm  
+
+<!-- Custom Color Module -->
+CMAP = 'viridis' 
+DPI = 900  
+SHP_ENCODING = 'utf-8' 
+EPSG_CODE = 32651  
